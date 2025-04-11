@@ -7,6 +7,7 @@ import concurrent.futures
 from functools import partial
 import os
 import uuid
+from datetime import datetime
 
 def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
     """
@@ -180,7 +181,8 @@ def scrape_page(url: str, page) -> dict:
             "title": get_page_title(page),
             "description": get_page_description(page),
             "content": page.content(),  # Get complete HTML content
-            "links": set()  # Use a set to store unique links
+            "links": set(),  # Use a set to store unique links
+            "updated_at": datetime.utcnow().isoformat()  # Add UTC timestamp
         }
 
         # Get all links and convert relative URLs to absolute
