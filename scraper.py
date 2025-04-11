@@ -1,16 +1,14 @@
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 import json
 from typing import Set, List, Dict, Any
 from urllib.parse import urljoin, urlparse
 import time
-import concurrent.futures
-from functools import partial
+import asyncio
 import os
 import uuid
 from datetime import datetime
-import threading
 
-def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
+async def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
     """
     Scroll to the bottom of the page, waiting for content to load.
 
@@ -19,16 +17,16 @@ def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> 
         max_scrolls (int): Maximum number of scroll attempts
         scroll_delay (float): Delay between scrolls in seconds
     """
-    last_height = page.evaluate("document.body.scrollHeight")
+    last_height = await page.evaluate("document.body.scrollHeight")
     scroll_count = 0
 
     while scroll_count < max_scrolls:
         # Scroll to bottom
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(scroll_delay)  # Wait for content to load
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(scroll_delay)  # Wait for content to load
 
         # Calculate new scroll height
-        new_height = page.evaluate("document.body.scrollHeight")
+        new_height = await page.evaluate("document.body.scrollHeight")
 
         # If height hasn't changed, we've reached the bottom
         if new_height == last_height:
@@ -37,20 +35,20 @@ def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> 
         last_height = new_height
         scroll_count += 1
 
-def _get_title_from_meta(page, meta_type: str) -> str:
+async def _get_title_from_meta(page, meta_type: str) -> str:
     """Helper function to get title from meta tags"""
     try:
         if meta_type == "og":
-            title = page.locator('meta[property="og:title"]').get_attribute('content')
+            title = await page.locator('meta[property="og:title"]').get_attribute('content')
         elif meta_type == "twitter":
-            title = page.locator('meta[name="twitter:title"]').get_attribute('content')
+            title = await page.locator('meta[name="twitter:title"]').get_attribute('content')
         if title and title.strip():
             return title.strip()
     except Exception as e:
         print(f"Error getting {meta_type} title: {str(e)}")
     return None
 
-def get_page_title(page) -> str:
+async def get_page_title(page) -> str:
     """
     Get the page title with multiple fallback methods in parallel.
     
@@ -62,49 +60,47 @@ def get_page_title(page) -> str:
     """
     # Try getting the title from the title tag first (most reliable)
     try:
-        title = page.title()
+        title = await page.title()
         if title and title.strip():
             return title.strip()
     except Exception as e:
         print(f"Error getting title: {e}")
 
     # Run all other fallbacks in parallel
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Prepare all the title extraction functions
-        futures = [
-            executor.submit(lambda: page.locator('h1').first.text_content() if page.locator('h1').count() > 0 else None),
-            executor.submit(partial(_get_title_from_meta, page, "og")),
-            executor.submit(partial(_get_title_from_meta, page, "twitter"))
-        ]
-        
-        # Get results as they complete
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                if result and result.strip():
-                    return result.strip()
-            except Exception as e:
-                print(f"Error in parallel title extraction: {e}")
+    tasks = [
+        page.locator('h1').first.text_content() if await page.locator('h1').count() > 0 else None,
+        _get_title_from_meta(page, "og"),
+        _get_title_from_meta(page, "twitter")
+    ]
+    
+    # Get results as they complete
+    for task in asyncio.as_completed(tasks):
+        try:
+            result = await task
+            if result and result.strip():
+                return result.strip()
+        except Exception as e:
+            print(f"Error in parallel title extraction: {e}")
     
     # If all else fails, return the URL
     return page.url
 
-def _get_description_from_meta(page, meta_type: str) -> str:
+async def _get_description_from_meta(page, meta_type: str) -> str:
     """Helper function to get description from meta tags"""
     try:
         if meta_type == "standard":
-            desc = page.locator('meta[name="description"]').get_attribute('content')
+            desc = await page.locator('meta[name="description"]').get_attribute('content')
         elif meta_type == "og":
-            desc = page.locator('meta[property="og:description"]').get_attribute('content')
+            desc = await page.locator('meta[property="og:description"]').get_attribute('content')
         elif meta_type == "twitter":
-            desc = page.locator('meta[name="twitter:description"]').get_attribute('content')
+            desc = await page.locator('meta[name="twitter:description"]').get_attribute('content')
         if desc and desc.strip():
             return desc.strip()
     except Exception as e:
         print(f"Error getting {meta_type} description: {str(e)}")
     return None
 
-def get_page_description(page) -> str:
+async def get_page_description(page) -> str:
     """
     Get the page description with multiple fallback methods in parallel.
     
@@ -115,29 +111,28 @@ def get_page_description(page) -> str:
         str: Page description or None if no description found
     """
     # Run all description extraction methods in parallel
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        # Prepare all the description extraction functions
-        futures = [
-            executor.submit(partial(_get_description_from_meta, page, "standard")),
-            executor.submit(partial(_get_description_from_meta, page, "og")),
-            executor.submit(partial(_get_description_from_meta, page, "twitter")),
-            executor.submit(lambda: page.locator('p').first.text_content() if page.locator('p').count() > 0 else None)
-        ]
-        
-        # Get results as they complete
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                if result and result.strip():
-                    return result.strip()
-            except Exception as e:
-                print(f"Error in parallel description extraction: {str(e)}")
+    tasks = [
+        _get_description_from_meta(page, "standard"),
+        _get_description_from_meta(page, "og"),
+        _get_description_from_meta(page, "twitter"),
+        page.locator('p').first.text_content() if await page.locator('p').count() > 0 else None
+    ]
+    
+    # Get results as they complete
+    for task in asyncio.as_completed(tasks):
+        try:
+            result = await task
+            if result and result.strip():
+                return result.strip()
+        except Exception as e:
+            print(f"Error in parallel description extraction: {e}")
     
     # Try getting from first meta tag with description in name as last resort
     try:
         meta_desc_tags = page.locator('meta[name*="description"]')
-        for i in range(meta_desc_tags.count()):
-            desc = meta_desc_tags.nth(i).get_attribute('content')
+        count = await meta_desc_tags.count()
+        for i in range(count):
+            desc = await meta_desc_tags.nth(i).get_attribute('content')
             if desc and desc.strip():
                 return desc.strip()
     except Exception as e:
@@ -145,7 +140,7 @@ def get_page_description(page) -> str:
     
     return None
 
-def scrape_page(url: str, page) -> dict:
+async def scrape_page(url: str, page) -> dict:
     """
     Scrape a single webpage and return its data.
 
@@ -158,39 +153,40 @@ def scrape_page(url: str, page) -> dict:
     """
     try:
         # Navigate to the page
-        page.goto(url)
-        page.wait_for_load_state("networkidle")
+        await page.goto(url)
+        await page.wait_for_load_state("networkidle")
         
         # Wait for 2 seconds to ensure all dynamic content is loaded
-        time.sleep(2)
+        await asyncio.sleep(2)
 
         # Scroll to bottom to load all content
-        scroll_to_bottom(page)
+        await scroll_to_bottom(page)
 
         # Clean the page using page_functions.js
         try:
             with open('page_functions.js', 'r') as f:
                 page_clean_script = f.read()
-            page.evaluate(page_clean_script)
-            page.evaluate("cleanPage()")
+            await page.evaluate(page_clean_script)
+            await page.evaluate("cleanPage()")
         except Exception as e:
             print(f"Error in page evaluation: {str(e)}")
 
         # Get page data
         data = {
             "url": page.url,
-            "title": get_page_title(page),
-            "description": get_page_description(page),
-            "content": page.content(),  # Get complete HTML content
+            "title": await get_page_title(page),
+            "description": await get_page_description(page),
+            "content": await page.content(),  # Get complete HTML content
             "links": set(),  # Use a set to store unique links
             "updated_at": datetime.utcnow().isoformat()  # Add UTC timestamp
         }
 
         # Get all links and convert relative URLs to absolute
         try:
-            for a in page.locator("a").all():
+            links = await page.locator("a").all()
+            for a in links:
                 try:
-                    href = a.get_attribute("href")
+                    href = await a.get_attribute("href")
                     if href:
                         absolute_url = urljoin(url, href)
                         if absolute_url.startswith(("http://", "https://")):
@@ -203,63 +199,72 @@ def scrape_page(url: str, page) -> dict:
 
         # Convert set back to list for JSON serialization
         data["links"] = list(data["links"])
+
+        # Save the scraped data to a file
+        try:
+            # Get domain for the current URL
+            current_domain = urlparse(url).netloc
+            
+            # Create domain-specific directory
+            domain_dir = os.path.join("outputs", current_domain)
+            os.makedirs(domain_dir, exist_ok=True)
+            
+            # Generate UUID for filename
+            filename = f"{uuid.uuid4()}.json"
+            filepath = os.path.join(domain_dir, filename)
+            
+            # Save the scraped data
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving data to file: {str(e)}")
+
         return data
 
     except Exception as e:
         print(f"Error scraping {url}: {str(e)}")
         return None
 
-def _close_page(page):
-    """Helper function to close a page asynchronously"""
-    try:
-        page.close()
-    except Exception as e:
-        print(f"Error closing page: {str(e)}")
-
-class PagePool:
-    """Manages a pool of browser pages for reuse"""
+class AsyncPagePool:
+    """Manages a pool of browser pages for async reuse"""
     def __init__(self, browser, pool_size=5):
         self.browser = browser
         self.pool_size = pool_size
         self.pages = []
-        self.lock = threading.Lock()
-        self._initialize_pool()
+        self.lock = asyncio.Lock()
+        self.available = asyncio.Event()
+        self.available.set()
 
-    def _initialize_pool(self):
+    async def initialize(self):
         """Initialize the page pool"""
         for _ in range(self.pool_size):
-            self.pages.append(self.browser.new_page())
+            page = await self.browser.new_page()
+            self.pages.append(page)
 
-    def get_page(self):
+    async def get_page(self):
         """Get a page from the pool, creating a new one if pool is empty"""
-        with self.lock:
+        async with self.lock:
             if self.pages:
                 return self.pages.pop()
-            return self.browser.new_page()
+            return await self.browser.new_page()
 
-    def return_page(self, page):
+    async def return_page(self, page):
         """Return a page to the pool"""
-        with self.lock:
+        async with self.lock:
             if len(self.pages) < self.pool_size:
                 self.pages.append(page)
             else:
                 # Close the page if pool is full
-                self._close_page_async(page)
+                await page.close()
 
-    def _close_page_async(self, page):
-        """Close a page asynchronously"""
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        executor.submit(_close_page, page)
-        executor.shutdown(wait=False)
-
-    def cleanup(self):
+    async def cleanup(self):
         """Clean up all pages in the pool"""
-        with self.lock:
+        async with self.lock:
             for page in self.pages:
-                self._close_page_async(page)
+                await page.close()
             self.pages.clear()
 
-def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> List[Dict]:
+async def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> List[Dict]:
     """
     Recursively scrape a website starting from the given URL.
 
@@ -271,75 +276,66 @@ def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> L
     Returns:
         List[Dict]: List of scraped page data
     """
-    playwright = sync_playwright().start()
-    browser = playwright.chromium.launch(headless=headless)
-    page_pool = PagePool(browser)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=headless)
+        page_pool = AsyncPagePool(browser)
+        await page_pool.initialize()
 
-    try:
-        visited_urls: Set[str] = set()
-        urls_to_visit: Set[str] = {start_url}
-        scraped_data: List[Dict] = []
-        
-        # Get the domain of the start URL
-        start_domain = urlparse(start_url).netloc
+        try:
+            visited_urls: Set[str] = set()
+            urls_to_visit: Set[str] = {start_url}
+            scraped_data: List[Dict] = []
+            
+            # Get the domain of the start URL
+            start_domain = urlparse(start_url).netloc
 
-        # Create outputs directory if it doesn't exist
-        os.makedirs("outputs", exist_ok=True)
+            # Create outputs directory if it doesn't exist
+            os.makedirs("outputs", exist_ok=True)
 
-        while urls_to_visit and len(scraped_data) < max_pages:
-            # Get next URL to visit
-            current_url = urls_to_visit.pop()
+            while urls_to_visit and len(scraped_data) < max_pages:
+                # Get up to 3 URLs to process in parallel
+                current_batch = []
+                while len(current_batch) < 3 and urls_to_visit and len(scraped_data) + len(current_batch) < max_pages:
+                    url = urls_to_visit.pop()
+                    if url not in visited_urls:
+                        current_batch.append(url)
+                        visited_urls.add(url)
 
-            # Skip if already visited
-            if current_url in visited_urls:
-                continue
+                if not current_batch:
+                    break
 
-            print(f"Scraping: {current_url}")
+                print(f"Scraping batch: {current_batch}")
 
-            # Get a page from the pool
-            page = page_pool.get_page()
-            try:
-                # Scrape the page
-                data = scrape_page(current_url, page)
-                if data:
-                    scraped_data.append(data)
-                    visited_urls.add(current_url)
+                # Create tasks for parallel scraping
+                tasks = []
+                pages = []
+                for url in current_batch:
+                    page = await page_pool.get_page()
+                    pages.append(page)
+                    tasks.append(scrape_page(url, page))
 
-                    # Get domain for the current URL
-                    current_domain = urlparse(current_url).netloc
+                # Run tasks in parallel and collect results
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results and return pages to pool
+                for i, (result, page) in enumerate(zip(results, pages)):
+                    await page_pool.return_page(page)
                     
-                    # Create domain-specific directory
-                    domain_dir = os.path.join("outputs", current_domain)
-                    os.makedirs(domain_dir, exist_ok=True)
-                    
-                    # Generate UUID for filename
-                    filename = f"{uuid.uuid4()}.json"
-                    filepath = os.path.join(domain_dir, filename)
-                    
-                    # Save the scraped data
-                    with open(filepath, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
+                    if isinstance(result, Exception):
+                        print(f"Error in parallel scraping: {str(result)}")
+                    elif result:
+                        scraped_data.append(result)
 
-                    # Add new links to visit only if they belong to the same domain
-                    for link in data["links"]:
-                        link_domain = urlparse(link).netloc
-                        if link_domain == start_domain and link not in visited_urls and link not in urls_to_visit:
-                            urls_to_visit.add(link)
-            finally:
-                # Return the page to the pool
-                page_pool.return_page(page)
+            return scraped_data
 
-        return scraped_data
-
-    finally:
-        page_pool.cleanup()
-        browser.close()
-        playwright.stop()
+        finally:
+            await page_pool.cleanup()
+            await browser.close()
 
 def main():
     # Example usage
     start_url = "https://vikramtiwari.com"
-    data = scrape_site(start_url, max_pages=50, headless=False)
+    data = asyncio.run(scrape_site(start_url, max_pages=50, headless=False))
     print(json.dumps(data, indent=2))
 
 if __name__ == "__main__":
