@@ -8,6 +8,7 @@ from functools import partial
 import os
 import uuid
 from datetime import datetime
+import threading
 
 def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
     """
@@ -208,6 +209,56 @@ def scrape_page(url: str, page) -> dict:
         print(f"Error scraping {url}: {str(e)}")
         return None
 
+def _close_page(page):
+    """Helper function to close a page asynchronously"""
+    try:
+        page.close()
+    except Exception as e:
+        print(f"Error closing page: {str(e)}")
+
+class PagePool:
+    """Manages a pool of browser pages for reuse"""
+    def __init__(self, browser, pool_size=5):
+        self.browser = browser
+        self.pool_size = pool_size
+        self.pages = []
+        self.lock = threading.Lock()
+        self._initialize_pool()
+
+    def _initialize_pool(self):
+        """Initialize the page pool"""
+        for _ in range(self.pool_size):
+            self.pages.append(self.browser.new_page())
+
+    def get_page(self):
+        """Get a page from the pool, creating a new one if pool is empty"""
+        with self.lock:
+            if self.pages:
+                return self.pages.pop()
+            return self.browser.new_page()
+
+    def return_page(self, page):
+        """Return a page to the pool"""
+        with self.lock:
+            if len(self.pages) < self.pool_size:
+                self.pages.append(page)
+            else:
+                # Close the page if pool is full
+                self._close_page_async(page)
+
+    def _close_page_async(self, page):
+        """Close a page asynchronously"""
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        executor.submit(_close_page, page)
+        executor.shutdown(wait=False)
+
+    def cleanup(self):
+        """Clean up all pages in the pool"""
+        with self.lock:
+            for page in self.pages:
+                self._close_page_async(page)
+            self.pages.clear()
+
 def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> List[Dict]:
     """
     Recursively scrape a website starting from the given URL.
@@ -222,7 +273,7 @@ def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> L
     """
     playwright = sync_playwright().start()
     browser = playwright.chromium.launch(headless=headless)
-    page = browser.new_page()
+    page_pool = PagePool(browser)
 
     try:
         visited_urls: Set[str] = set()
@@ -245,37 +296,43 @@ def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> L
 
             print(f"Scraping: {current_url}")
 
-            # Scrape the page
-            data = scrape_page(current_url, page)
-            if data:
-                scraped_data.append(data)
-                visited_urls.add(current_url)
+            # Get a page from the pool
+            page = page_pool.get_page()
+            try:
+                # Scrape the page
+                data = scrape_page(current_url, page)
+                if data:
+                    scraped_data.append(data)
+                    visited_urls.add(current_url)
 
-                # Get domain for the current URL
-                current_domain = urlparse(current_url).netloc
-                
-                # Create domain-specific directory
-                domain_dir = os.path.join("outputs", current_domain)
-                os.makedirs(domain_dir, exist_ok=True)
-                
-                # Generate UUID for filename
-                filename = f"{uuid.uuid4()}.json"
-                filepath = os.path.join(domain_dir, filename)
-                
-                # Save the scraped data
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    # Get domain for the current URL
+                    current_domain = urlparse(current_url).netloc
+                    
+                    # Create domain-specific directory
+                    domain_dir = os.path.join("outputs", current_domain)
+                    os.makedirs(domain_dir, exist_ok=True)
+                    
+                    # Generate UUID for filename
+                    filename = f"{uuid.uuid4()}.json"
+                    filepath = os.path.join(domain_dir, filename)
+                    
+                    # Save the scraped data
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
 
-                # Add new links to visit only if they belong to the same domain
-                for link in data["links"]:
-                    link_domain = urlparse(link).netloc
-                    if link_domain == start_domain and link not in visited_urls and link not in urls_to_visit:
-                        urls_to_visit.add(link)
+                    # Add new links to visit only if they belong to the same domain
+                    for link in data["links"]:
+                        link_domain = urlparse(link).netloc
+                        if link_domain == start_domain and link not in visited_urls and link not in urls_to_visit:
+                            urls_to_visit.add(link)
+            finally:
+                # Return the page to the pool
+                page_pool.return_page(page)
 
         return scraped_data
 
     finally:
-        page.close()
+        page_pool.cleanup()
         browser.close()
         playwright.stop()
 
