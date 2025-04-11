@@ -5,6 +5,8 @@ from urllib.parse import urljoin, urlparse
 import time
 import concurrent.futures
 from functools import partial
+import os
+import uuid
 
 def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
     """
@@ -228,6 +230,9 @@ def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> L
         # Get the domain of the start URL
         start_domain = urlparse(start_url).netloc
 
+        # Create outputs directory if it doesn't exist
+        os.makedirs("outputs", exist_ok=True)
+
         while urls_to_visit and len(scraped_data) < max_pages:
             # Get next URL to visit
             current_url = urls_to_visit.pop()
@@ -243,6 +248,21 @@ def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> L
             if data:
                 scraped_data.append(data)
                 visited_urls.add(current_url)
+
+                # Get domain for the current URL
+                current_domain = urlparse(current_url).netloc
+                
+                # Create domain-specific directory
+                domain_dir = os.path.join("outputs", current_domain)
+                os.makedirs(domain_dir, exist_ok=True)
+                
+                # Generate UUID for filename
+                filename = f"{uuid.uuid4()}.json"
+                filepath = os.path.join(domain_dir, filename)
+                
+                # Save the scraped data
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
 
                 # Add new links to visit only if they belong to the same domain
                 for link in data["links"]:
