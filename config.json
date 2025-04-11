@@ -1,0 +1,19 @@
+{
+    "scraper": {
+        "max_pages": 50,
+        "headless": false,
+        "scroll": {
+            "max_scrolls": 10,
+            "scroll_delay": 1.0
+        },
+        "page_pool": {
+            "size": 5
+        },
+        "parallel_processing": {
+            "batch_size": 3
+        }
+    },
+    "output": {
+        "directory": "outputs"
+    }
+} 

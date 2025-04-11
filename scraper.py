@@ -8,7 +8,14 @@ import os
 import uuid
 from datetime import datetime
 
-async def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.0) -> None:
+# Load configuration
+def load_config():
+    with open('config.json', 'r') as f:
+        return json.load(f)
+
+config = load_config()
+
+async def scroll_to_bottom(page, max_scrolls: int = None, scroll_delay: float = None) -> None:
     """
     Scroll to the bottom of the page, waiting for content to load.
 
@@ -17,6 +24,9 @@ async def scroll_to_bottom(page, max_scrolls: int = 10, scroll_delay: float = 1.
         max_scrolls (int): Maximum number of scroll attempts
         scroll_delay (float): Delay between scrolls in seconds
     """
+    max_scrolls = max_scrolls or config['scraper']['scroll']['max_scrolls']
+    scroll_delay = scroll_delay or config['scraper']['scroll']['scroll_delay']
+    
     last_height = await page.evaluate("document.body.scrollHeight")
     scroll_count = 0
 
@@ -197,8 +207,8 @@ async def scrape_page(url: str, page) -> dict:
         except Exception as e:
             print(f"Error getting links: {str(e)}")
 
-        # Convert set back to list for JSON serialization
-        data["links"] = list(data["links"])
+        # Convert set to list and sort alphabetically
+        data["links"] = sorted(list(data["links"]))
 
         # Save the scraped data to a file
         try:
@@ -206,7 +216,7 @@ async def scrape_page(url: str, page) -> dict:
             current_domain = urlparse(url).netloc
             
             # Create domain-specific directory
-            domain_dir = os.path.join("outputs", current_domain)
+            domain_dir = os.path.join(config['output']['directory'], current_domain)
             os.makedirs(domain_dir, exist_ok=True)
             
             # Generate UUID for filename
@@ -227,9 +237,9 @@ async def scrape_page(url: str, page) -> dict:
 
 class AsyncPagePool:
     """Manages a pool of browser pages for async reuse"""
-    def __init__(self, browser, pool_size=5):
+    def __init__(self, browser, pool_size=None):
         self.browser = browser
-        self.pool_size = pool_size
+        self.pool_size = pool_size or config['scraper']['page_pool']['size']
         self.pages = []
         self.lock = asyncio.Lock()
         self.available = asyncio.Event()
@@ -264,7 +274,7 @@ class AsyncPagePool:
                 await page.close()
             self.pages.clear()
 
-async def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True) -> List[Dict]:
+async def scrape_site(start_url: str, max_pages: int = None, headless: bool = None) -> List[Dict]:
     """
     Recursively scrape a website starting from the given URL.
 
@@ -276,6 +286,10 @@ async def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True
     Returns:
         List[Dict]: List of scraped page data
     """
+    max_pages = max_pages or config['scraper']['max_pages']
+    headless = headless if headless is not None else config['scraper']['headless']
+    batch_size = config['scraper']['parallel_processing']['batch_size']
+
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=headless)
         page_pool = AsyncPagePool(browser)
@@ -290,12 +304,12 @@ async def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True
             start_domain = urlparse(start_url).netloc
 
             # Create outputs directory if it doesn't exist
-            os.makedirs("outputs", exist_ok=True)
+            os.makedirs(config['output']['directory'], exist_ok=True)
 
             while urls_to_visit and len(scraped_data) < max_pages:
-                # Get up to 3 URLs to process in parallel
+                # Get up to batch_size URLs to process in parallel
                 current_batch = []
-                while len(current_batch) < 3 and urls_to_visit and len(scraped_data) + len(current_batch) < max_pages:
+                while len(current_batch) < batch_size and urls_to_visit and len(scraped_data) + len(current_batch) < max_pages:
                     url = urls_to_visit.pop()
                     if url not in visited_urls:
                         current_batch.append(url)
@@ -335,7 +349,7 @@ async def scrape_site(start_url: str, max_pages: int = 10, headless: bool = True
 def main():
     # Example usage
     start_url = "https://vikramtiwari.com"
-    data = asyncio.run(scrape_site(start_url, max_pages=50, headless=False))
+    data = asyncio.run(scrape_site(start_url))
     print(json.dumps(data, indent=2))
 
 if __name__ == "__main__":
