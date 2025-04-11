@@ -13,7 +13,12 @@ def load_config():
     with open('config.json', 'r') as f:
         return json.load(f)
 
+def load_websites():
+    with open('websites.json', 'r') as f:
+        return json.load(f)
+
 config = load_config()
+websites_config = load_websites()
 
 async def scroll_to_bottom(page, max_scrolls: int = None, scroll_delay: float = None) -> None:
     """
@@ -347,7 +352,7 @@ async def scrape_site(start_url: str, max_pages: int = None, headless: bool = No
             await browser.close()
 
 def main():
-    # Example usage
+    """Example usage of the scraper"""
     start_url = "https://vikramtiwari.com"
     data = asyncio.run(scrape_site(start_url))
     print(json.dumps(data, indent=2))
