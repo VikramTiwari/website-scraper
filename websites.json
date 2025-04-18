@@ -2,17 +2,17 @@
     "websites": [
         {
             "url": "https://vikramtiwari.com",
-            "name": "Vikram's Blog",
+            "name": "Vikram's home page",
+            "schedule": "0 0 * * *",
+            "max_pages": 50,
+            "enabled": false
+        },
+        {
+            "url": "https://notes.vikramtiwari.com",
+            "name": "Vikram's notes",
             "schedule": "0 */6 * * *",
             "max_pages": 50,
             "enabled": true
-        },
-        {
-            "url": "https://example.com",
-            "name": "Example Site",
-            "schedule": "0 0 * * *",
-            "max_pages": 100,
-            "enabled": true
         }
     ]
-} 
+}

@@ -344,6 +344,11 @@ async def scrape_site(start_url: str, max_pages: int = None, headless: bool = No
                         print(f"Error in parallel scraping: {str(result)}")
                     elif result:
                         scraped_data.append(result)
+                        # Add discovered links to urls_to_visit if they're from the same domain
+                        for link in result.get('links', []):
+                            link_domain = urlparse(link).netloc
+                            if link_domain == start_domain and link not in visited_urls:
+                                urls_to_visit.add(link)
 
             return scraped_data
 
